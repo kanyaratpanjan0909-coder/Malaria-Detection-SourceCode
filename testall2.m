@@ -1,0 +1,142 @@
+%% =====================================================================
+%  เปรียบเทียบ Accuracy ของ Linear Regression VS Logistic Regression
+%  บนชุดภาพทดสอบทั้งโฟลเดอร์ (Batch Compare)
+%  =====================================================================
+%  ข้อกำหนดก่อนรัน:
+%   - ต้องมีไฟล์ malaria_model.mat (จาก Liner.m)
+%   - ต้องมีไฟล์ malaria_logistic_model.mat (จาก Logistic_Regression.m)
+% =====================================================================
+
+clear; clc; close all;
+
+datasetPath = 'C:\Users\NB\Desktop\Malaria_Project\Project\Logistic';
+
+%% 1) โหลดโมเดลทั้งสองตัว
+linearModelFile   = fullfile(datasetPath, 'malaria_model.mat');
+logisticModelFile = fullfile(datasetPath, 'malaria_logistic_model.mat');
+
+if ~isfile(linearModelFile)
+    error('ไม่พบไฟล์โมเดล Linear Regression: %s', linearModelFile);
+end
+if ~isfile(logisticModelFile)
+    error('ไม่พบไฟล์โมเดล Logistic Regression: %s', logisticModelFile);
+end
+
+linModel = load(linearModelFile);
+logModel = load(logisticModelFile);
+imgSize  = linModel.imgSize;
+sigmoid  = @(z) 1 ./ (1 + exp(-z));
+
+%% 2) กำหนดโฟลเดอร์ทดสอบ (แก้ path ตรงนี้ถ้าจำเป็น)
+testParasitizedDir = fullfile(datasetPath, 'Test Parasitized');
+testUninfectedDir  = fullfile(datasetPath, 'Test Uninfected');
+
+testParaFiles = [dir(fullfile(testParasitizedDir, '*.png')); ...
+                  dir(fullfile(testParasitizedDir, '*.jpg'))];
+testUninFiles = [dir(fullfile(testUninfectedDir, '*.png')); ...
+                  dir(fullfile(testUninfectedDir, '*.jpg'))];
+
+allFiles   = [testParaFiles; testUninFiles];
+trueLabels = [ones(numel(testParaFiles),1); zeros(numel(testUninFiles),1)];
+numImages  = numel(allFiles);
+
+fprintf('พบภาพทั้งหมด %d ภาพ (Parasitized=%d, Uninfected=%d)\n', ...
+    numImages, numel(testParaFiles), numel(testUninFiles));
+
+%% 3) ทำนายด้วยทั้งสองโมเดลทีละภาพ
+predLin = zeros(numImages,1);
+predLog = zeros(numImages,1);
+
+fprintf('\nกำลังประมวลผล...\n');
+for i = 1:numImages
+    imgPath = fullfile(allFiles(i).folder, allFiles(i).name);
+    img = imread(imgPath);
+    feat = getCellFeatures(img, imgSize);
+
+    % Linear
+    featNormLin = (feat - linModel.muX) ./ linModel.sigX;
+    yhatLin = [1, featNormLin] * linModel.theta;
+    predLin(i) = double(yhatLin >= 0.5);
+
+    % Logistic
+    featNormLog = (feat - logModel.muX) ./ logModel.sigX;
+    probLog = sigmoid([1, featNormLog] * logModel.theta);
+    predLog(i) = double(probLog >= logModel.threshold);
+
+    if mod(i, 100) == 0
+        fprintf('  ประมวลผลแล้ว %d / %d ภาพ\n', i, numImages);
+    end
+end
+
+%% 4) สรุปผลเปรียบเทียบ
+accLin = mean(predLin == trueLabels) * 100;
+accLog = mean(predLog == trueLabels) * 100;
+agreeRate = mean(predLin == predLog) * 100;
+
+fprintf('\n===================================================\n');
+fprintf('                 สรุปผลเปรียบเทียบโมเดล\n');
+fprintf('===================================================\n');
+fprintf('จำนวนภาพทดสอบทั้งหมด      : %d ภาพ\n\n', numImages);
+fprintf('Accuracy (Linear Regression)   : %.2f%%\n', accLin);
+fprintf('Accuracy (Logistic Regression) : %.2f%%\n\n', accLog);
+fprintf('อัตราที่สองโมเดลทำนาย "ตรงกัน" : %.2f%%\n', agreeRate);
+
+% Confusion Matrix แยกแต่ละโมเดล
+printConfusion('Linear Regression', predLin, trueLabels);
+printConfusion('Logistic Regression', predLog, trueLabels);
+
+%% 5) กราฟเปรียบเทียบ Accuracy
+figure('Name', 'เปรียบเทียบความแม่นยำของสองโมเดล', 'NumberTitle', 'off');
+bar([accLin, accLog]);
+set(gca, 'XTickLabel', {'Linear Regression', 'Logistic Regression'});
+ylabel('Accuracy (%)');
+ylim([0 100]);
+title('เปรียบเทียบความแม่นยำ: Linear vs Logistic Regression');
+grid on;
+for i = 1:2
+    vals = [accLin, accLog];
+    text(i, vals(i)+2, sprintf('%.2f%%', vals(i)), ...
+        'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+end
+
+
+%% =====================================================================
+%  ฟังก์ชันย่อย
+%  =====================================================================
+function printConfusion(modelName, pred, actual)
+    TP = sum(pred == 1 & actual == 1);
+    TN = sum(pred == 0 & actual == 0);
+    FP = sum(pred == 1 & actual == 0);
+    FN = sum(pred == 0 & actual == 1);
+    fprintf('\n--- Confusion Matrix: %s ---\n', modelName);
+    fprintf('                 ทำนาย: ติดเชื้อ   ทำนาย: ปกติ\n');
+    fprintf('จริง: ติดเชื้อ      %5d              %5d\n', TP, FN);
+    fprintf('จริง: ปกติ          %5d              %5d\n', FP, TN);
+end
+
+function feat = getCellFeatures(img, imgSize)
+    if size(img,3) == 1
+        img = cat(3, img, img, img);
+    end
+    img = imresize(img, imgSize);
+
+    R = double(img(:,:,1));
+    G = double(img(:,:,2));
+    B = double(img(:,:,3));
+    gray = double(rgb2gray(img));
+
+    meanR = mean(R(:));
+    meanG = mean(G(:));
+    meanB = mean(B(:));
+    stdGray = std(gray(:));
+
+    meanGray = mean(gray(:));
+    entropyVal = entropy(uint8(gray));
+
+    edgeImg = edge(uint8(gray), 'Canny');
+    edgeDensity = sum(edgeImg(:)) / numel(edgeImg);
+
+    colorVariance = var([R(:); G(:); B(:)]);
+
+    feat = [meanR, meanG, meanB, meanGray, stdGray, entropyVal, edgeDensity, colorVariance];
+end
